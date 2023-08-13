@@ -1,155 +1,215 @@
 import torch
-from torch.autograd import Function, Variable
-from torch.nn import Module
-from torch.nn.parameter import Parameter
 
-import operator
 
 def jacobian(f, x, eps):
+    """
+    Computes the Jacobian of a function f at x using finite differences.
+    :param f: function
+    :param x: input
+    :param eps: epsilon
+    :return: Jacobian of f at x
+    """
     if x.ndimension() == 2:
         assert x.size(0) == 1
         x = x.squeeze()
 
-    e = Variable(torch.eye(len(x)).type_as(get_data_maybe(x)))
-    J = []
-    for i in range(len(x)):
-        J.append((f(x + eps*e[i]) - f(x - eps*e[i]))/(2.*eps))
-    J = torch.stack(J).transpose(0,1)
-    return J
-
-
-def expandParam(X, n_batch, nDim):
-    if X.ndimension() in (0, nDim):
-        return X, False
-    elif X.ndimension() == nDim - 1:
-        return X.unsqueeze(0).expand(*([n_batch] + list(X.size()))), True
-    else:
-        raise RuntimeError("Unexpected number of dimensions.")
+    x_high_precision = x.double()
+    n = x_high_precision.numel()
+    e = torch.eye(n, dtype=torch.float64, device=x_high_precision.device)
+    f_original = f(x_high_precision)
+    J_separate = []
+    for i in range(n):
+        perturbed_value = f(x_high_precision + eps * e[i])
+        for j, f_val in enumerate(perturbed_value.unbind()):
+            J_separate.append((f_val - f_original[j]) / eps)
+    J_high_precision = torch.stack(J_separate).reshape(n, -1).T
+    return J_high_precision.to(dtype=x.dtype)
 
 
 def bdiag(d):
-    assert d.ndimension() == 2
-    nBatch, sz = d.size()
-    dtype = d.type() if not isinstance(d, Variable) else d.data.type()
-    D = torch.zeros(nBatch, sz, sz).type(dtype)
-    I = torch.eye(sz).repeat(nBatch, 1, 1).type(dtype).byte()
-    D[I] = d.view(-1)
+    """
+    Constructs a batched diagonal matrix from a batched vector.
+    :param d: batched vector
+    :return: batched diagonal matrix
+    """
+    n_batch, n_dim = d.size()
+    D = torch.zeros(n_batch, n_dim, n_dim, dtype=d.dtype, device=d.device)
+    for i in range(n_dim):
+        D[:, i, i] = d[:, i]
     return D
 
 
 def bger(x, y):
-    return x.unsqueeze(2).bmm(y.unsqueeze(1))
+    """
+    Constructs a batched outer product of two batched vectors.
+    :param x: batched vector
+    :param y: batched vector
+    :return: batched outer product
+    """
+    return torch.einsum('bi,bj->bij', x, y)
 
 
 def bmv(X, y):
+    """
+    Computes a batched matrix-vector product.
+    :param X: batched matrix
+    :param y: batched vector
+    :return: batched matrix-vector product
+    """
     return X.bmm(y.unsqueeze(2)).squeeze(2)
 
 
 def bquad(x, Q):
+    """
+    Computes a batched quadratic form.
+    :param x: batched vector
+    :param Q: batched matrix
+    :return: batched quadratic form
+    """
     return x.unsqueeze(1).bmm(Q).bmm(x.unsqueeze(2)).squeeze(1).squeeze(1)
 
 
 def bdot(x, y):
+    """
+    Computes a batched dot product.
+    :param x: batched vector
+    :param y: batched vector
+    :return: batched dot product
+    """
     return torch.bmm(x.unsqueeze(1), y.unsqueeze(2)).squeeze(1).squeeze(1)
 
 
+# TODO: discard eclamp method and directly use torch.clamp
 def eclamp(x, lower, upper):
-    # In-place!!
-    if type(lower) == type(x):
-        assert x.size() == lower.size()
+    # # In-place!!
+    # if type(lower) == type(x):
+    #     assert x.size() == lower.size()
+    #
+    # if type(upper) == type(x):
+    #     assert x.size() == upper.size()
+    #
+    # I = x < lower
+    # x[I] = lower[I] if not isinstance(lower, float) else lower
+    #
+    # I = x > upper
+    # x[I] = upper[I] if not isinstance(upper, float) else upper
 
-    if type(upper) == type(x):
-        assert x.size() == upper.size()
-
-    I = x < lower
-    x[I] = lower[I] if not isinstance(lower, float) else lower
-
-    I = x > upper
-    x[I] = upper[I] if not isinstance(upper, float) else upper
-
+    # (eladsharony) This is a non-inplace version of the above.
+    x = torch.clamp(x, lower, upper)
     return x
 
 
 def get_data_maybe(x):
-    return x if not isinstance(x, Variable) else x.data
+    """
+    Returns the data of a tensor, or the input itself if it is not a tensor.
+    """
+    return x.detach() if torch.is_tensor(x) else x
 
 
-_seen_tables = []
-def table_log(tag, d):
-    # TODO: There's probably a better way to handle formatting here,
-    # or a better way altogether to replace this quick hack.
-    global _seen_tables
+def table_log(headers, values):
+    """
+    Logs a table with headers and values.
 
-    def print_row(r):
-        print('| ' + ' | '.join(r) + ' |')
+    Args:
+    - headers (list): List of headers for the table.
+    - values (list of lists): Rows of values for the table.
+    """
 
-    if tag not in _seen_tables:
-        print_row(map(operator.itemgetter(0), d))
-        _seen_tables.append(tag)
+    # Define a helper function to print a row
+    def print_row(values, width=15):
+        """Helper function to print a row in the table."""
+        print("".join([str(val).ljust(width) for val in values]))
 
-    s = []
-    for di in d:
-        assert len(di) in [2,3]
-        if len(di) == 3:
-            e, fmt = di[1:]
-            s.append(fmt.format(e))
-        else:
-            e = di[1]
-            s.append(str(e))
-    print_row(s)
+    # Print the table
+    separator = ["-" * 15 for _ in headers]
+    print_row(separator)
+    print_row(headers)
+    print_row(separator)
+    for value_row in values:
+        print_row(value_row)
 
 
 def get_traj(T, u, x_init, dynamics):
-    from .mpc import QuadCost, LinDx # TODO: This is messy.
+    """
+    Returns a trajectory given a control sequence and initial state.
 
+    Args:
+    - T (int): Number of time steps.
+    - u (list of tensors): List of control inputs.
+    - x_init (tensor): Initial state.
+    - dynamics (function): Function that computes the next state given the
+        current state and control input.
+
+    Returns:
+    - x (tensor): Trajectory.
+    """
+    from .mpc import LinDx  # TODO: This is messy.
+
+    x = torch.zeros(T, *x_init.shape, dtype=x_init.dtype, device=x_init.device)
+    x[0, ...] = x_init
     if isinstance(dynamics, LinDx):
         F = get_data_maybe(dynamics.F)
         f = get_data_maybe(dynamics.f)
         if f is not None:
             assert f.shape == F.shape[:3]
-
-    x = [get_data_maybe(x_init)]
-    for t in range(T):
-        xt = x[t]
-        ut = get_data_maybe(u[t])
-        if t < T-1:
-            # new_x = f(Variable(xt), Variable(ut)).data
-            if isinstance(dynamics, LinDx):
-                xut = torch.cat((xt, ut), 1)
-                new_x = bmv(F[t], xut)
-                if f is not None:
-                    new_x += f[t]
-            else:
-                new_x = dynamics(Variable(xt), Variable(ut)).data
-            x.append(new_x)
-    x = torch.stack(x, dim=0)
+        for t in range(T - 1):
+            xt = x[t]
+            ut = get_data_maybe(u[t])
+            xut = torch.cat((xt, ut), 1)
+            new_x = bmv(F[t], xut)
+            if f is not None:
+                new_x += f[t]
+            x[t+1, ...] = new_x
+    else:
+        for t in range(T - 1):
+            xt = x[t]
+            ut = get_data_maybe(u[t])
+            new_x = dynamics(xt, ut).detach()
+            x[t+1, ...] = new_x
     return x
 
 
 def get_cost(T, u, cost, dynamics=None, x_init=None, x=None):
-    from .mpc import QuadCost, LinDx # TODO: This is messy.
+    """
+    Returns the cost of a trajectory given a control sequence.
+
+    Args:
+    - T (int): Number of time steps.
+    - u (list of tensors): List of control inputs.
+    - cost (function): Function that computes the cost of a state and control
+        input.
+    - dynamics (function): Function that computes the next state given the
+        current state and control input.
+    - x_init (tensor): Initial state.
+    - x (tensor): Trajectory.
+
+    Returns:
+    - total_obj (tensor): Total cost of the trajectory.
+    """
+    from .mpc import QuadCost   # TODO: This is messy.
 
     assert x_init is not None or x is not None
+    if x is None:
+        x = get_traj(T, u, x_init, dynamics)
 
     if isinstance(cost, QuadCost):
         C = get_data_maybe(cost.C)
         c = get_data_maybe(cost.c)
-
-    if x is None:
-        x = get_traj(T, u, x_init, dynamics)
-
-    objs = []
-    for t in range(T):
-        xt = x[t]
-        ut = u[t]
-        xut = torch.cat((xt, ut), 1)
-        if isinstance(cost, QuadCost):
-            obj = 0.5*bquad(xut, C[t]) + bdot(xut, c[t])
-        else:
+        xut = torch.cat((x[0], u[0]), 1)
+        obj = 0.5 * bquad(xut, C[0]) + bdot(xut, c[0])
+        total_obj = obj
+        for t in range(T-1):
+            xut = torch.cat((x[t+1], u[t+1]), 1)
+            obj = 0.5*bquad(xut, C[t+1]) + bdot(xut, c[t+1])
+            total_obj += obj
+    else:
+        xut = torch.cat((x[0], u[0]), 1)
+        obj = cost(xut)
+        total_obj = obj
+        for t in range(T-1):
+            xut = torch.cat((x[t+1], u[t+1]))
             obj = cost(xut)
-        objs.append(obj)
-    objs = torch.stack(objs, dim=0)
-    total_obj = torch.sum(objs, dim=0)
+            total_obj += obj
     return total_obj
 
 
@@ -157,9 +217,3 @@ def detach_maybe(x):
     if x is None:
         return None
     return x if not x.requires_grad else x.detach()
-
-
-def data_maybe(x):
-    if x is None:
-        return None
-    return x.data
