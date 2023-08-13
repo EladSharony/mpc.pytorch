@@ -79,26 +79,6 @@ def bdot(x, y):
     return torch.bmm(x.unsqueeze(1), y.unsqueeze(2)).squeeze(1).squeeze(1)
 
 
-# TODO: discard eclamp method and directly use torch.clamp
-def eclamp(x, lower, upper):
-    # # In-place!!
-    # if type(lower) == type(x):
-    #     assert x.size() == lower.size()
-    #
-    # if type(upper) == type(x):
-    #     assert x.size() == upper.size()
-    #
-    # I = x < lower
-    # x[I] = lower[I] if not isinstance(lower, float) else lower
-    #
-    # I = x > upper
-    # x[I] = upper[I] if not isinstance(upper, float) else upper
-
-    # (eladsharony) This is a non-inplace version of the above.
-    x = torch.clamp(x, lower, upper)
-    return x
-
-
 def get_data_maybe(x):
     """
     Returns the data of a tensor, or the input itself if it is not a tensor.
@@ -148,8 +128,7 @@ def get_traj(T, u, x_init, dynamics):
     x = torch.zeros(T, *x_init.shape, dtype=x_init.dtype, device=x_init.device)
     x[0, ...] = x_init
     if isinstance(dynamics, LinDx):
-        F = get_data_maybe(dynamics.F)
-        f = get_data_maybe(dynamics.f)
+        F, f = get_data_maybe(dynamics.F), get_data_maybe(dynamics.f)
         if f is not None:
             assert f.shape == F.shape[:3]
         for t in range(T - 1):
@@ -193,8 +172,7 @@ def get_cost(T, u, cost, dynamics=None, x_init=None, x=None):
         x = get_traj(T, u, x_init, dynamics)
 
     if isinstance(cost, QuadCost):
-        C = get_data_maybe(cost.C)
-        c = get_data_maybe(cost.c)
+        C, c = get_data_maybe(cost.C), get_data_maybe(cost.c)
         xut = torch.cat((x[0], u[0]), 1)
         obj = 0.5 * bquad(xut, C[0]) + bdot(xut, c[0])
         total_obj = obj
@@ -214,6 +192,9 @@ def get_cost(T, u, cost, dynamics=None, x_init=None, x=None):
 
 
 def detach_maybe(x):
+    """
+    Detaches a tensor if it requires grad.
+    """
     if x is None:
         return None
     return x if not x.requires_grad else x.detach()
