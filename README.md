@@ -1,24 +1,25 @@
-# mpc.pytorch • [![Build Status][travis-image]][travis] [![PyPi][pypi-image]][pypi] [![License][license-image]][license]
-
-[travis-image]: https://travis-ci.org/locuslab/mpc.pytorch.png?branch=master
-[travis]: http://travis-ci.org/locuslab/mpc.pytorch
-
-[pypi-image]: https://img.shields.io/pypi/v/mpc.svg
-[pypi]: https://pypi.python.org/pypi/mpc
-
 [license-image]: http://img.shields.io/badge/license-MIT-blue.svg?style=flat
 [license]: LICENSE
 
-*A fast and differentiable model predictive control solver for PyTorch.
-Crafted by <a href="https://bamos.github.io">Brandon Amos</a>,
-Ivan Jimenez,
-Jacob Sacks,
-<a href='https://www.cc.gatech.edu/~bboots3/'>Byron Boots</a>,
-and
-<a href="https://zicokolter.com">J. Zico Kolter</a>.*
+
+# mpc.pytorch (Forked Version)  • [![License][license-image]][license]
+> Note: This is a fork of the original [mpc.pytorch](http://locuslab.github.io/mpc.pytorch) library by Brandon Amos, Ivan Jimenez, Jacob Sacks, Byron Boots, and J. Zico Kolter. This fork contains numerous changes, optimizations, and updates.
+
+
+## Changes in this Fork
+* Added optimizations and performance improvements.
+* Updated deprecated features.
+* Added comprehensive documentation and examples.
+---
+
+## Original Description
+> A fast and differentiable model predictive control solver for PyTorch.
+> 
+For more details on the original project, please visit their [project website](http://locuslab.github.io/mpc.pytorch).
 
 ---
 
-+ [More details are available on our project website here](http://locuslab.github.io/mpc.pytorch)
-+ This is still an early alpha release, be prepared for some rough
-  spots and get in touch if you have any questions!
+### Acknowledgments
+Thanks to the original authors for their great work.
+
+---
