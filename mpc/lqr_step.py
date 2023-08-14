@@ -207,6 +207,7 @@ def LQRStep(n_state,
         full_du_norm = None
 
         i = 0
+        # Iterate until the cost decreases for all batches or the maximum number of iterations is reached
         while ((current_cost is None or (old_cost is not None and (current_cost > old_cost).any().item()))
                and i < max_linesearch_iter):
 
