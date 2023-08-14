@@ -1,12 +1,8 @@
 import torch
 from torch.autograd import Function, Variable
 from torch.nn import Module
-
 from collections import namedtuple
-
 from enum import Enum
-
-import sys
 
 from . import util
 from .lqr_step import LQRStep
@@ -135,7 +131,8 @@ class MPC(Module):
             slew_rate_penalty=None,
             prev_ctrl=None,
             not_improved_lim=5,
-            best_cost_eps=1e-4
+            best_cost_eps=1e-4,
+            device="cuda:0" if torch.cuda.is_available() else "cpu",
     ):
         super().__init__()
 
@@ -147,6 +144,7 @@ class MPC(Module):
         self.T = T
         self.u_lower = u_lower
         self.u_upper = u_upper
+        self.device = device
 
         if not isinstance(u_lower, float):
             self.u_lower = util.detach_maybe(self.u_lower)
@@ -173,7 +171,7 @@ class MPC(Module):
         self.slew_rate_penalty = slew_rate_penalty
         self.prev_ctrl = prev_ctrl
 
-    def forward(self, x_init, cost, dx):
+    def forward(self, x_init, cost, dx, log_iterations=False):
         # Type Checking
         if not (isinstance(cost, QuadCost) or isinstance(cost, Module) or isinstance(cost, Function)):
             raise ValueError("Invalid cost type.")
@@ -210,7 +208,7 @@ class MPC(Module):
 
         # Setup initial state and control sequences
         if self.u_init is None:
-            u = torch.zeros(self.T, n_batch, self.n_ctrl, dtype=x_init.dtype)
+            u = torch.zeros(self.T, n_batch, self.n_ctrl, dtype=x_init.dtype, device=self.device)
         else:
             u = self.u_init
             if u.ndimension() == 2:
@@ -223,8 +221,16 @@ class MPC(Module):
 
         # Optimization Loop
         best = None
+        # (eladsharony): log iterations
+        if log_iterations:
+            iter_log = {
+                'x': [x_init],
+                'u': [u],
+                'cost': [util.get_cost(self.T, u, cost, dx, x_init=x_init)],
+            }
+
         n_not_improved = 0
-        for i in range(self.lqr_iter):
+        for iter_num in range(self.lqr_iter):
             u = util.detach_maybe(u).clone().requires_grad_(True)
 
             # Compute the trajectory given the current control sequence
@@ -262,15 +268,19 @@ class MPC(Module):
 
             if self.verbose > 0:
                 util.table_log('lqr', (
-                    ('iter', i),
+                    ('iter', iter_num),
                     ('mean(cost)', torch.mean(best['costs']).item(), '{:.4e}'),
                     ('||full_du||_max', max(full_du_norm).item(), '{:.2e}'),
                     # ('||alpha_du||_max', max(alpha_du_norm), '{:.2e}'),
-                    # TODO: alphas, total_qp_iters here is for the current
-                    # iterate, not the best
+                    # TODO: alphas, total_qp_iters here is for the current iterate, not the best
                     ('mean(alphas)', mean_alphas.item(), '{:.2e}'),
                     ('total_qp_iters', n_total_qp_iter),
                 ))
+
+            if log_iterations:
+                iter_log[x].append(x.detach())
+                iter_log[u].append(u.detach())
+                iter_log[cost].append(costs.detach())
 
             if max(full_du_norm) < self.eps or n_not_improved > self.not_improved_lim:
                 break
@@ -284,6 +294,7 @@ class MPC(Module):
         C, c = (cost.C, cost.c) if isinstance(cost, QuadCost) else self.approximate_cost(x, u, cost, diff=True)
         x, u = self.solve_lqr_subproblem(x_init, C, c, F, f, cost, dx, x, u, no_op_forward=True)
 
+        is_converged = full_du_norm < self.eps
         if self.detach_unconverged and max(best['full_du_norm']) > self.eps:
             if self.exit_unconverged:
                 assert False
@@ -291,14 +302,15 @@ class MPC(Module):
                 print("LQR Warning: All examples did not converge to a fixed point."
                       "Detaching and *not* backpropping through the bad examples.")
 
-            I = full_du_norm < self.eps
+            I = is_converged
             Ix = I.unsqueeze(0).unsqueeze(2).expand_as(x).type_as(x.data)
             Iu = I.unsqueeze(0).unsqueeze(2).expand_as(u).type_as(u.data)
             x = x * Ix + x.clone().detach() * (1. - Ix)
             u = u * Iu + u.clone().detach() * (1. - Iu)
 
         costs = best['costs']
-        return x, u, costs
+        return (x, u, costs, iter_num + 1, is_converged.detach()) if not log_iterations else \
+            (x, u, costs, iter_num + 1, is_converged.detach(), iter_log)
 
     def solve_lqr_subproblem(self, x_init, C, c, F, f, cost, dynamics, x, u, no_op_forward=False):
         if self.slew_rate_penalty is None or isinstance(cost, Module):
@@ -330,7 +342,7 @@ class MPC(Module):
             half_gamI = (self.slew_rate_penalty *
                          torch.eye(self.n_ctrl).unsqueeze(0).unsqueeze(0).repeat(self.T, n_batch, 1, 1))
 
-            _C = torch.zeros(self.T, n_batch, _nsc, _nsc, dtype=C.dtype)
+            _C = torch.zeros(self.T, n_batch, _nsc, _nsc, dtype=C.dtype, device=self.device)
             _C[:, :, :self.n_ctrl, :self.n_ctrl] = half_gamI
             _C[:, :, -self.n_ctrl:, :self.n_ctrl] = -half_gamI
             _C[:, :, :self.n_ctrl, -self.n_ctrl:] = -half_gamI
@@ -338,20 +350,20 @@ class MPC(Module):
             slew_C = _C.clone()
             _C = _C + torch.nn.ZeroPad2d((self.n_ctrl, 0, self.n_ctrl, 0))(C)
 
-            _c = torch.cat((torch.zeros(self.T, n_batch, self.n_ctrl, dtype=c.dtype), c), 2)
+            _c = torch.cat((torch.zeros(self.T, n_batch, self.n_ctrl, dtype=c.dtype, device=self.device), c), 2)
 
             _F0 = torch.cat((torch.zeros(self.n_ctrl, self.n_state + self.n_ctrl), torch.eye(self.n_ctrl),), 1).type_as(
                 F).unsqueeze(0).unsqueeze(0).repeat(self.T - 1, n_batch, 1, 1)
 
-            _F1 = torch.cat((torch.zeros(self.T - 1, n_batch, self.n_state, self.n_ctrl, dtype=F.dtype), F), 3)
+            _F1 = torch.cat((torch.zeros(self.T - 1, n_batch, self.n_state, self.n_ctrl, dtype=F.dtype, device=self.device), F), 3)
 
             _F = torch.cat((_F0, _F1), 2)
 
-            _f = torch.cat((torch.zeros(self.T - 1, n_batch, self.n_ctrl, dtype=f.dtype), f), 2) \
-                if f is not None else torch.tensor([])
+            _f = torch.cat((torch.zeros(self.T - 1, n_batch, self.n_ctrl, dtype=f.dtype, device=self.device), f), 2) \
+                if f is not None else torch.tensor([], device=self.device)
 
             u_data = util.detach_maybe(u)
-            prev_u = self.prev_ctrl if self.prev_ctrl else torch.zeros(1, n_batch, self.n_ctrl, dtype=u.dtype)
+            prev_u = self.prev_ctrl if self.prev_ctrl else torch.zeros(1, n_batch, self.n_ctrl, dtype=u.dtype, device=self.device)
             if prev_u.ndimension() == 1:
                 prev_u = prev_u.unsqueeze(0)
             utm1s = torch.cat((prev_u, u_data[:-1]))

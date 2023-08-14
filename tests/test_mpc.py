@@ -21,10 +21,11 @@ from mpc.dynamics import NNDynamics, AffineDynamics
 from mpc.lqr_step import LQRStep
 from mpc.mpc import GradMethods, QuadCost, LinDx
 
+
 def lqr_qp_cp(C, c, lower, upper):
     n = c.shape[0]
     x = cp.Variable(n)
-    obj = 0.5*cp.quad_form(x, C) + cp.sum(cp.multiply(c, x))
+    obj = 0.5 * cp.quad_form(x, C) + cp.sum(cp.multiply(c, x))
     cons = [lower <= x, x <= upper]
     prob = cp.Problem(cp.Minimize(obj), cons)
     prob.solve()
@@ -38,23 +39,27 @@ def lqr_cp(C, c, F, f, x_init, T, n_state, n_ctrl, u_lower, u_upper):
                              x_0 = x_init
                              u_lower <= u <= u_upper
     """
-    tau = cp.Variable((n_state+n_ctrl, T))
+    tau = cp.Variable((n_state + n_ctrl, T))
     assert (u_lower is None) == (u_upper is None)
 
     objs = []
-    x0 = tau[:n_state,0]
-    u0 = tau[n_state:,0]
+    x0 = tau[:n_state, 0]
+    u0 = tau[n_state:, 0]
     cons = [x0 == x_init]
     for t in range(T):
-        xt = tau[:n_state,t]
-        ut = tau[n_state:,t]
-        objs.append(0.5*cp.quad_form(tau[:,t], C[t]) +
-                    cp.sum(cp.multiply(c[t], tau[:,t])))
+        xt = tau[:n_state, t]
+        ut = tau[n_state:, t]
+        objs.append(0.5 * cp.quad_form(tau[:, t], C[t]) +
+                    cp.sum(cp.multiply(c[t], tau[:, t])))
         if u_lower is not None:
             cons += [u_lower[t] <= ut, ut <= u_upper[t]]
-        if t+1 < T:
-            xtp1 = tau[:n_state, t+1]
-            cons.append(xtp1 == F[t]*tau[:,t]+f[t])
+        if t + 1 < T:
+            xtp1 = tau[:n_state, t + 1]
+            # UserWarning: This use of ``*`` has resulted in matrix multiplication.
+            # Using ``*`` for matrix multiplication has been deprecated since CVXPY 1.1.
+            # Use ``@`` for matrix-matrix and matrix-vector multiplication.
+            cons.append(xtp1 == F[t] @ tau[:, t] + f[t])
+
     prob = cp.Problem(cp.Minimize(sum(objs)), cons)
     # prob.solve(solver=cp.SCS, verbose=True)
     prob.solve()
@@ -99,7 +104,7 @@ def test_lqr_linear_unbounded():
     C = np.matmul(C.transpose(0, 1, 3, 2), C)
     c = npr.randn(T, n_batch, n_sc)
     alpha = 0.2
-    R = np.tile(np.eye(n_state)+alpha*np.random.randn(n_state, n_state),
+    R = np.tile(np.eye(n_state) + alpha * np.random.randn(n_state, n_state),
                 (T, n_batch, 1, 1))
     S = np.tile(np.random.randn(n_state, n_ctrl), (T, n_batch, 1, 1))
     F = np.concatenate((R, S), axis=3)
@@ -107,23 +112,23 @@ def test_lqr_linear_unbounded():
     x_init = npr.randn(n_batch, n_state)
     # u_lower = -100.*npr.random((T, n_batch, n_ctrl))
     # u_upper = 100.*npr.random((T, n_batch, n_ctrl))
-    u_lower = -1e4*np.ones((T, n_batch, n_ctrl))
-    u_upper = 1e4*np.ones((T, n_batch, n_ctrl))
+    u_lower = -1e4 * np.ones((T, n_batch, n_ctrl))
+    u_upper = 1e4 * np.ones((T, n_batch, n_ctrl))
 
     tau_cp, objs_cp = lqr_cp(
-        C[:,0], c[:,0], F[:,0], f[:,0], x_init[0], T, n_state, n_ctrl,
+        C[:, 0], c[:, 0], F[:, 0], f[:, 0], x_init[0], T, n_state, n_ctrl,
         None, None
     )
     tau_cp = tau_cp.T
-    x_cp = tau_cp[:,:n_state]
-    u_cp = tau_cp[:,n_state:]
+    x_cp = tau_cp[:, :n_state]
+    u_cp = tau_cp[:, n_state:]
 
     C, c, R, S, F, f, x_init, u_lower, u_upper = [
         Variable(torch.Tensor(x).double()) if x is not None else None
         for x in [C, c, R, S, F, f, x_init, u_lower, u_upper]
     ]
 
-    dynamics = AffineDynamics(R[0,0], S[0,0], f[0,0])
+    dynamics = AffineDynamics(R[0, 0], S[0, 0], f[0, 0])
 
     u_lqr = None
     x_lqr, u_lqr, objs_lqr = mpc.MPC(
@@ -135,7 +140,7 @@ def test_lqr_linear_unbounded():
     )(x_init, QuadCost(C, c), dynamics)
     tau_lqr = torch.cat((x_lqr, u_lqr), 2)
     tau_lqr = util.get_data_maybe(tau_lqr)
-    npt.assert_allclose(tau_cp, tau_lqr[:,0].numpy(), rtol=1e-3)
+    npt.assert_allclose(tau_cp, tau_lqr[:, 0].numpy(), rtol=1e-3)
 
     u_lqr = None
     x_lqr, u_lqr, objs_lqr = mpc.MPC(
@@ -146,7 +151,7 @@ def test_lqr_linear_unbounded():
     )(x_init, QuadCost(C, c), dynamics)
     tau_lqr = torch.cat((x_lqr, u_lqr), 2)
     tau_lqr = util.get_data_maybe(tau_lqr)
-    npt.assert_allclose(tau_cp, tau_lqr[:,0].numpy(), rtol=1e-3)
+    npt.assert_allclose(tau_cp, tau_lqr[:, 0].numpy(), rtol=1e-3)
 
 
 def test_lqr_linear_bounded():
@@ -160,7 +165,7 @@ def test_lqr_linear_bounded():
     C = np.matmul(C.transpose(0, 1, 3, 2), C)
     c = npr.randn(T, n_batch, n_sc)
     alpha = 0.2
-    R = np.tile(np.eye(n_state)+alpha*np.random.randn(n_state, n_state),
+    R = np.tile(np.eye(n_state) + alpha * np.random.randn(n_state, n_state),
                 (T, n_batch, 1, 1))
     S = np.tile(np.random.randn(n_state, n_ctrl), (T, n_batch, 1, 1))
     F = np.concatenate((R, S), axis=3)
@@ -170,18 +175,18 @@ def test_lqr_linear_bounded():
     u_upper = npr.random((T, n_batch, n_ctrl))
 
     tau_cp, objs_cp = lqr_cp(
-        C[:,0], c[:,0], F[:,0], f[:,0], x_init[0], T, n_state, n_ctrl,
-        u_lower[:,0], u_upper[:,0],
+        C[:, 0], c[:, 0], F[:, 0], f[:, 0], x_init[0], T, n_state, n_ctrl,
+        u_lower[:, 0], u_upper[:, 0],
     )
     tau_cp = tau_cp.T
-    x_cp = tau_cp[:,:n_state]
-    u_cp = tau_cp[:,n_state:]
+    x_cp = tau_cp[:, :n_state]
+    u_cp = tau_cp[:, n_state:]
 
     C, c, R, S, F, f, x_init, u_lower, u_upper = [
         Variable(torch.Tensor(x).double()) if x is not None else None
         for x in [C, c, R, S, F, f, x_init, u_lower, u_upper]
     ]
-    dynamics = AffineDynamics(R[0,0], S[0,0], f[0,0])
+    dynamics = AffineDynamics(R[0, 0], S[0, 0], f[0, 0])
 
     x_lqr, u_lqr, objs_lqr = mpc.MPC(
         n_state, n_ctrl, T, u_lower, u_upper,
@@ -191,7 +196,7 @@ def test_lqr_linear_bounded():
     )(x_init, QuadCost(C, c), dynamics)
     tau_lqr = util.get_data_maybe(torch.cat((x_lqr, u_lqr), 2))
 
-    npt.assert_allclose(tau_cp, tau_lqr[:,0].numpy(), rtol=1e-3)
+    npt.assert_allclose(tau_cp, tau_lqr[:, 0].numpy(), rtol=1e-3)
 
 
 def test_lqr_linear_bounded_delta():
@@ -204,9 +209,9 @@ def test_lqr_linear_bounded_delta():
     C = np.matmul(C.transpose(0, 1, 3, 2), C)
     c = npr.randn(T, n_batch, n_sc)
     alpha = 0.2
-    R = np.tile(np.eye(n_state)+alpha*np.random.randn(n_state, n_state),
+    R = np.tile(np.eye(n_state) + alpha * np.random.randn(n_state, n_state),
                 (T, n_batch, 1, 1))
-    S = 0.01*np.tile(np.random.randn(n_state, n_ctrl), (T, n_batch, 1, 1))
+    S = 0.01 * np.tile(np.random.randn(n_state, n_ctrl), (T, n_batch, 1, 1))
     F = np.concatenate((R, S), axis=3)
     f = np.tile(npr.randn(n_state), (T, n_batch, 1))
     x_init = npr.randn(n_batch, n_state)
@@ -214,18 +219,18 @@ def test_lqr_linear_bounded_delta():
     u_upper = npr.random((T, n_batch, n_ctrl))
 
     tau_cp, objs_cp = lqr_cp(
-        C[:,0], c[:,0], F[:,0], f[:,0], x_init[0], T, n_state, n_ctrl,
-        u_lower[:,0], u_upper[:,0],
+        C[:, 0], c[:, 0], F[:, 0], f[:, 0], x_init[0], T, n_state, n_ctrl,
+        u_lower[:, 0], u_upper[:, 0],
     )
     tau_cp = tau_cp.T
-    x_cp = tau_cp[:,:n_state]
-    u_cp = tau_cp[:,n_state:]
+    x_cp = tau_cp[:, :n_state]
+    u_cp = tau_cp[:, n_state:]
 
     C, c, R, S, F, f, x_init, u_lower, u_upper = [
         Variable(torch.Tensor(x).double()) if x is not None else None
         for x in [C, c, R, S, F, f, x_init, u_lower, u_upper]
     ]
-    dynamics = AffineDynamics(R[0,0], S[0,0], f[0,0])
+    dynamics = AffineDynamics(R[0, 0], S[0, 0], f[0, 0])
 
     delta_u = 0.1
     x_lqr, u_lqr, objs_lqr = mpc.MPC(
@@ -252,7 +257,7 @@ def test_lqr_cuda_singleton():
     C = np.matmul(C.transpose(0, 1, 3, 2), C)
     c = npr.randn(T, n_batch, n_sc)
     alpha = 0.2
-    R = np.tile(np.eye(n_state)+alpha*np.random.randn(n_state, n_state),
+    R = np.tile(np.eye(n_state) + alpha * np.random.randn(n_state, n_state),
                 (T, n_batch, 1, 1))
     S = np.tile(np.random.randn(n_state, n_ctrl), (T, n_batch, 1, 1))
     F = np.concatenate((R, S), axis=3)
@@ -260,23 +265,23 @@ def test_lqr_cuda_singleton():
     x_init = npr.randn(n_batch, n_state)
     # u_lower = -100.*npr.random((T, n_batch, n_ctrl))
     # u_upper = 100.*npr.random((T, n_batch, n_ctrl))
-    u_lower = -1e4*np.ones((T, n_batch, n_ctrl))
-    u_upper = 1e4*np.ones((T, n_batch, n_ctrl))
+    u_lower = -1e4 * np.ones((T, n_batch, n_ctrl))
+    u_upper = 1e4 * np.ones((T, n_batch, n_ctrl))
 
     tau_cp, objs_cp = lqr_cp(
-        C[:,0], c[:,0], F[:,0], f[:,0], x_init[0], T, n_state, n_ctrl,
+        C[:, 0], c[:, 0], F[:, 0], f[:, 0], x_init[0], T, n_state, n_ctrl,
         None, None
     )
     tau_cp = tau_cp.T
-    x_cp = tau_cp[:,:n_state]
-    u_cp = tau_cp[:,n_state:]
+    x_cp = tau_cp[:, :n_state]
+    u_cp = tau_cp[:, n_state:]
 
     C, c, R, S, F, f, x_init, u_lower, u_upper = [
         Variable(torch.Tensor(x).double().cuda()) if x is not None else None
         for x in [C, c, R, S, F, f, x_init, u_lower, u_upper]
     ]
 
-    dynamics = AffineDynamics(R[0,0], S[0,0], f[0,0])
+    dynamics = AffineDynamics(R[0, 0], S[0, 0], f[0, 0])
 
     u_lqr = None
     x_lqr, u_lqr, objs_lqr = mpc.MPC(
@@ -286,7 +291,7 @@ def test_lqr_cuda_singleton():
     )(x_init, QuadCost(C, c), dynamics)
     tau_lqr = torch.cat((x_lqr, u_lqr), 2)
     tau_lqr = util.get_data_maybe(torch.cat((x_lqr, u_lqr), 2))
-    npt.assert_allclose(tau_cp, tau_lqr[:,0].cpu().numpy(), rtol=1e-3)
+    npt.assert_allclose(tau_cp, tau_lqr[:, 0].cpu().numpy(), rtol=1e-3)
 
     u_lqr = None
     x_lqr, u_lqr, objs_lqr = mpc.MPC(
@@ -296,7 +301,7 @@ def test_lqr_cuda_singleton():
     )(x_init, QuadCost(C, c), dynamics)
     tau_lqr = torch.cat((x_lqr, u_lqr), 2)
     tau_lqr = util.get_data_maybe(torch.cat((x_lqr, u_lqr), 2))
-    npt.assert_allclose(tau_cp, tau_lqr[:,0].cpu().numpy(), rtol=1e-3)
+    npt.assert_allclose(tau_cp, tau_lqr[:, 0].cpu().numpy(), rtol=1e-3)
 
 
 # TODO: Lots of duplicated code here. Should clean up.
@@ -307,17 +312,17 @@ def test_lqr_backward_cost_linear_dynamics_unconstrained():
     hidden_sizes = [10, 10]
     n_sc = n_state + n_ctrl
 
-    C = 10.*npr.randn(T, n_batch, n_sc, n_sc).astype(np.float64)
+    C = 10. * npr.randn(T, n_batch, n_sc, n_sc).astype(np.float64)
     C = np.matmul(C.transpose(0, 1, 3, 2), C)
-    c = 10.*npr.randn(T, n_batch, n_sc).astype(np.float64)
+    c = 10. * npr.randn(T, n_batch, n_sc).astype(np.float64)
 
     x_init = npr.randn(n_batch, n_state).astype(np.float64)
     beta = 100.
-    u_lower = -beta*np.ones((T, n_batch, n_ctrl)).astype(np.float64)
-    u_upper = beta*np.ones((T, n_batch, n_ctrl)).astype(np.float64)
+    u_lower = -beta * np.ones((T, n_batch, n_ctrl)).astype(np.float64)
+    u_upper = beta * np.ones((T, n_batch, n_ctrl)).astype(np.float64)
 
-    F = npr.randn(T-1, n_batch, n_state, n_sc)
-    f = npr.randn(T-1, n_batch, n_state)
+    F = npr.randn(T - 1, n_batch, n_state, n_sc)
+    f = npr.randn(T - 1, n_batch, n_state)
 
     def forward_numpy(C, c, x_init, u_lower, u_upper, F, f):
         _C, _c, _x_init, _u_lower, _u_upper, F, f = [
@@ -341,11 +346,11 @@ def test_lqr_backward_cost_linear_dynamics_unconstrained():
         return forward_numpy(C, c_, x_init, u_lower, u_upper, F, f)
 
     def f_F(F_flat):
-        F_ = F_flat.reshape(T-1, n_batch, n_state, n_sc)
-        return forward_numpy(C, c, x_init, u_lower, u_upper, F_ ,f)
+        F_ = F_flat.reshape(T - 1, n_batch, n_state, n_sc)
+        return forward_numpy(C, c, x_init, u_lower, u_upper, F_, f)
 
     def f_f(f_flat):
-        f_ = f_flat.reshape(T-1, n_batch, n_state)
+        f_ = f_flat.reshape(T - 1, n_batch, n_state)
         return forward_numpy(C, c, x_init, u_lower, u_upper, F, f_)
 
     u = forward_numpy(C, c, x_init, u_lower, u_upper, F, f)
@@ -402,17 +407,17 @@ def test_lqr_backward_cost_linear_dynamics_constrained():
     hidden_sizes = [10, 10]
     n_sc = n_state + n_ctrl
 
-    C = 10.*npr.randn(T, n_batch, n_sc, n_sc).astype(np.float64)
+    C = 10. * npr.randn(T, n_batch, n_sc, n_sc).astype(np.float64)
     C = np.matmul(C.transpose(0, 1, 3, 2), C)
-    c = 10.*npr.randn(T, n_batch, n_sc).astype(np.float64)
+    c = 10. * npr.randn(T, n_batch, n_sc).astype(np.float64)
 
     x_init = npr.randn(n_batch, n_state).astype(np.float64)
     beta = 0.5
-    u_lower = -beta*np.ones((T, n_batch, n_ctrl)).astype(np.float64)
-    u_upper = beta*np.ones((T, n_batch, n_ctrl)).astype(np.float64)
+    u_lower = -beta * np.ones((T, n_batch, n_ctrl)).astype(np.float64)
+    u_upper = beta * np.ones((T, n_batch, n_ctrl)).astype(np.float64)
 
-    F = npr.randn(T-1, n_batch, n_state, n_sc)
-    f = npr.randn(T-1, n_batch, n_state)
+    F = npr.randn(T - 1, n_batch, n_state, n_sc)
+    f = npr.randn(T - 1, n_batch, n_state)
 
     def forward_numpy(C, c, x_init, u_lower, u_upper, F, f):
         _C, _c, _x_init, _u_lower, _u_upper, F, f = [
@@ -436,11 +441,11 @@ def test_lqr_backward_cost_linear_dynamics_constrained():
         return forward_numpy(C, c_, x_init, u_lower, u_upper, F, f)
 
     def f_F(F_flat):
-        F_ = F_flat.reshape(T-1, n_batch, n_state, n_sc)
+        F_ = F_flat.reshape(T - 1, n_batch, n_state, n_sc)
         return forward_numpy(C, c, x_init, u_lower, u_upper, F_, f)
 
     def f_f(f_flat):
-        f_ = f_flat.reshape(T-1, n_batch, n_state)
+        f_ = f_flat.reshape(T - 1, n_batch, n_state)
         return forward_numpy(C, c, x_init, u_lower, u_upper, F, f_)
 
     def f_x_init(x_init):
@@ -507,15 +512,15 @@ def test_lqr_backward_cost_affine_dynamics_module_constrained():
     hidden_sizes = [10]
     n_sc = n_state + n_ctrl
 
-    C = 10.*npr.randn(T, n_batch, n_sc, n_sc).astype(np.float64)
+    C = 10. * npr.randn(T, n_batch, n_sc, n_sc).astype(np.float64)
     C = np.matmul(C.transpose(0, 1, 3, 2), C)
-    c = 10.*npr.randn(T, n_batch, n_sc).astype(np.float64)
+    c = 10. * npr.randn(T, n_batch, n_sc).astype(np.float64)
 
     x_init = npr.randn(n_batch, n_state).astype(np.float64)
     # beta = 0.5
     beta = 2.0
-    u_lower = -beta*np.ones((T, n_batch, n_ctrl)).astype(np.float64)
-    u_upper = beta*np.ones((T, n_batch, n_ctrl)).astype(np.float64)
+    u_lower = -beta * np.ones((T, n_batch, n_ctrl)).astype(np.float64)
+    u_upper = beta * np.ones((T, n_batch, n_ctrl)).astype(np.float64)
 
     _C, _c, _x_init, _u_lower, _u_upper = [
         Variable(torch.Tensor(x).double(), requires_grad=True)
@@ -523,9 +528,9 @@ def test_lqr_backward_cost_affine_dynamics_module_constrained():
         for x in [C, c, x_init, u_lower, u_upper]
     ]
     F = Variable(
-        torch.randn(1, 1, n_state, n_sc).repeat(T-1, 1, 1, 1).double(),
+        torch.randn(1, 1, n_state, n_sc).repeat(T - 1, 1, 1, 1).double(),
         requires_grad=True)
-    dynamics = AffineDynamics(F[0,0,:,:n_state], F[0,0,:,n_state:])
+    dynamics = AffineDynamics(F[0, 0, :, :n_state], F[0, 0, :, n_state:])
 
     u_init = None
     x_lqr, u_lqr, objs_lqr = mpc.MPC(
@@ -557,6 +562,7 @@ def test_lqr_backward_cost_affine_dynamics_module_constrained():
 
     npt.assert_allclose(du_dF, du_dF_, atol=1e-4)
 
+
 def test_lqr_backward_cost_nn_dynamics_module_constrained():
     npr.seed(0)
     torch.manual_seed(0)
@@ -564,14 +570,14 @@ def test_lqr_backward_cost_nn_dynamics_module_constrained():
     hidden_sizes = [10, 10]
     n_sc = n_state + n_ctrl
 
-    C = 10.*npr.randn(T, n_batch, n_sc, n_sc).astype(np.float64)
+    C = 10. * npr.randn(T, n_batch, n_sc, n_sc).astype(np.float64)
     C = np.matmul(C.transpose(0, 1, 3, 2), C)
-    c = 10.*npr.randn(T, n_batch, n_sc).astype(np.float64)
+    c = 10. * npr.randn(T, n_batch, n_sc).astype(np.float64)
 
     x_init = npr.randn(n_batch, n_state).astype(np.float64)
     beta = 1.
-    u_lower = -beta*np.ones((T, n_batch, n_ctrl)).astype(np.float64)
-    u_upper = beta*np.ones((T, n_batch, n_ctrl)).astype(np.float64)
+    u_lower = -beta * np.ones((T, n_batch, n_ctrl)).astype(np.float64)
+    u_upper = beta * np.ones((T, n_batch, n_ctrl)).astype(np.float64)
 
     dynamics = NNDynamics(
         n_state, n_ctrl, hidden_sizes, activation='sigmoid').double()
@@ -656,14 +662,14 @@ def test_lqr_backward_cost_nn_dynamics_module_constrained_slew():
     hidden_sizes = [10, 10]
     n_sc = n_state + n_ctrl
 
-    C = 10.*npr.randn(T, n_batch, n_sc, n_sc).astype(np.float64)
+    C = 10. * npr.randn(T, n_batch, n_sc, n_sc).astype(np.float64)
     C = np.matmul(C.transpose(0, 1, 3, 2), C)
-    c = 10.*npr.randn(T, n_batch, n_sc).astype(np.float64)
+    c = 10. * npr.randn(T, n_batch, n_sc).astype(np.float64)
 
     x_init = npr.randn(n_batch, n_state).astype(np.float64)
     beta = 1.
-    u_lower = -beta*np.ones((T, n_batch, n_ctrl)).astype(np.float64)
-    u_upper = beta*np.ones((T, n_batch, n_ctrl)).astype(np.float64)
+    u_lower = -beta * np.ones((T, n_batch, n_ctrl)).astype(np.float64)
+    u_upper = beta * np.ones((T, n_batch, n_ctrl)).astype(np.float64)
 
     dynamics = NNDynamics(
         n_state, n_ctrl, hidden_sizes, activation='sigmoid').double()
@@ -751,15 +757,15 @@ def test_lqr_linearization():
     hidden_sizes = [10]
     n_sc = n_state + n_ctrl
 
-    C = 10.*npr.randn(T, n_batch, n_sc, n_sc).astype(np.float64)
+    C = 10. * npr.randn(T, n_batch, n_sc, n_sc).astype(np.float64)
     C = np.matmul(C.transpose(0, 1, 3, 2), C)
-    c = 10.*npr.randn(T, n_batch, n_sc).astype(np.float64)
+    c = 10. * npr.randn(T, n_batch, n_sc).astype(np.float64)
 
     x_init = npr.randn(n_batch, n_state).astype(np.float64)
     # beta = 0.5
     beta = 2.0
-    u_lower = -beta*np.ones((T, n_batch, n_ctrl)).astype(np.float64)
-    u_upper = beta*np.ones((T, n_batch, n_ctrl)).astype(np.float64)
+    u_lower = -beta * np.ones((T, n_batch, n_ctrl)).astype(np.float64)
+    u_upper = beta * np.ones((T, n_batch, n_ctrl)).astype(np.float64)
 
     _C, _c, _x_init, _u_lower, _u_upper = [
         Variable(torch.Tensor(x).double(), requires_grad=True)
@@ -767,7 +773,7 @@ def test_lqr_linearization():
         for x in [C, c, x_init, u_lower, u_upper]
     ]
     F = Variable(
-        torch.randn(1, 1, n_state, n_sc).repeat(T-1, 1, 1, 1).double(),
+        torch.randn(1, 1, n_state, n_sc).repeat(T - 1, 1, 1, 1).double(),
         requires_grad=True)
     dynamics = NNDynamics(
         n_state, n_ctrl, hidden_sizes, activation='sigmoid').double()
@@ -782,7 +788,7 @@ def test_lqr_linearization():
     x = util.get_traj(T, u, x_init=_x_init, dynamics=dynamics)
     Fan, fan = _lqr.linearize_dynamics(x, u, dynamics, diff=False)
 
-    _lqr.grad_method=GradMethods.AUTO_DIFF
+    _lqr.grad_method = GradMethods.AUTO_DIFF
     Fau, fau = _lqr.linearize_dynamics(x, u, dynamics, diff=False)
     npt.assert_allclose(Fan.data.numpy(), Fau.data.numpy(), atol=1e-4)
     npt.assert_allclose(fan.data.numpy(), fau.data.numpy(), atol=1e-4)
@@ -790,7 +796,7 @@ def test_lqr_linearization():
     # Make sure diff version doesn't crash:
     Fau, fau = _lqr.linearize_dynamics(x, u, dynamics, diff=True)
 
-    _lqr.grad_method=GradMethods.FINITE_DIFF
+    _lqr.grad_method = GradMethods.FINITE_DIFF
     Ff, ff = _lqr.linearize_dynamics(x, u, dynamics, diff=False)
     npt.assert_allclose(Fan.data.numpy(), Ff.data.numpy(), atol=1e-4)
     npt.assert_allclose(fan.data.numpy(), ff.data.numpy(), atol=1e-4)
@@ -808,10 +814,10 @@ def test_lqr_slew_rate():
 
     torch.manual_seed(1)
     C = torch.randn(T, n_batch, n_sc, n_sc)
-    C = C.transpose(2,3).matmul(C)
+    C = C.transpose(2, 3).matmul(C)
     c = torch.randn(T, n_batch, n_sc)
     x_init = torch.randn(n_batch, n_state)
-    R = torch.eye(n_state) + alpha*torch.randn(n_state, n_state)
+    R = torch.eye(n_state) + alpha * torch.randn(n_state, n_state)
     S = torch.randn(n_state, n_ctrl)
     f = torch.randn(n_state)
     C, c, x_init, R, S, f = map(Variable, (C, c, x_init, R, S, f))
@@ -843,7 +849,7 @@ def test_lqr_slew_rate():
     npt.assert_allclose(x.data.numpy(), x_slew_eps.data.numpy(), atol=1e-3)
     npt.assert_allclose(u.data.numpy(), u_slew_eps.data.numpy(), atol=1e-3)
 
-    x_slew, u_slew, objs_slew= mpc.MPC(
+    x_slew, u_slew, objs_slew = mpc.MPC(
         n_state, n_ctrl, T,
         u_lower=None, u_upper=None, u_init=None,
         lqr_iter=10,
@@ -870,12 +876,12 @@ def test_memory():
     n_sc = n_state + n_ctrl
 
     # Randomly initialize a PSD quadratic cost and linear dynamics.
-    C = torch.randn(T*n_batch, n_sc, n_sc)
+    C = torch.randn(T * n_batch, n_sc, n_sc)
     C = torch.bmm(C, C.transpose(1, 2)).view(T, n_batch, n_sc, n_sc)
     c = torch.randn(T, n_batch, n_sc)
 
     alpha = 0.2
-    R = (torch.eye(n_state)+alpha*torch.randn(n_state, n_state)).repeat(T, n_batch, 1, 1)
+    R = (torch.eye(n_state) + alpha * torch.randn(n_state, n_state)).repeat(T, n_batch, 1, 1)
     S = torch.randn(T, n_batch, n_state, n_ctrl)
     F = torch.cat((R, S), dim=3)
 
@@ -936,11 +942,12 @@ def test_memory():
     assert mem_used == 0
 
 
-if __name__=='__main__':
+if __name__ == '__main__':
     import sys
     from IPython.core import ultratb
+
     sys.excepthook = ultratb.FormattedTB(mode='Verbose',
-         color_scheme='Linux', call_pdb=1)
+                                         color_scheme='Linux', call_pdb=1)
 
     test_lqr_qp()
     test_lqr_linear_unbounded()
@@ -954,5 +961,5 @@ if __name__=='__main__':
     test_lqr_linearization()
     test_lqr_slew_rate()
 
-    # test_lqr_cuda_singleton()
-    # test_memory()
+    test_lqr_cuda_singleton()
+    test_memory()

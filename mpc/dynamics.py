@@ -1,9 +1,7 @@
 import torch
-from torch.autograd import Function, Variable
+from torch.autograd import Variable
 import torch.nn.functional as F
 from torch import nn
-from torch.nn.parameter import Parameter
-
 from . import util
 
 ACTS = {
@@ -12,15 +10,15 @@ ACTS = {
     'elu': F.elu,
 }
 
+
 class NNDynamics(nn.Module):
-    def __init__(self, n_state, n_ctrl, hidden_sizes=[100],
-                 activation='sigmoid', passthrough=True):
+    def __init__(self, n_state, n_ctrl, hidden_sizes=[100], activation='sigmoid', passthrough=True):
         super().__init__()
 
         self.passthrough = passthrough
 
         self.fcs = []
-        in_sz = n_state+n_ctrl
+        in_sz = n_state + n_ctrl
         for out_sz in hidden_sizes + [n_state]:
             fc = nn.Linear(in_sz, out_sz)
             self.fcs.append(fc)
@@ -30,15 +28,13 @@ class NNDynamics(nn.Module):
         assert activation in ACTS.keys()
         act_f = ACTS[activation]
         self.activation = activation
-        self.acts = [act_f]*(len(self.fcs)-1)+[lambda x:x] # Activation functions.
+        self.acts = [act_f] * (len(self.fcs) - 1) + [lambda x: x]  # Activation functions.
 
         self.Ws = [y.weight for y in self.fcs]
-        self.zs = [] # Activations.
-
+        self.zs = []  # Activations.
 
     def __getstate__(self):
-        return (self.fcs, self.activation, self.passthrough)
-
+        return self.fcs, self.activation, self.passthrough
 
     def __setstate__(self, state):
         super().__init__()
@@ -50,9 +46,8 @@ class NNDynamics(nn.Module):
             self.fcs, self.activation, self.passthrough = state
 
         act_f = ACTS[self.activation]
-        self.acts = [act_f]*(len(self.fcs)-1)+[lambda x:x] # Activation functions.
+        self.acts = [act_f] * (len(self.fcs) - 1) + [lambda x: x]  # Activation functions.
         self.Ws = [y.weight for y in self.fcs]
-
 
     def forward(self, x, u):
         x_dim, u_dim = x.ndimension(), u.ndimension()
@@ -93,26 +88,26 @@ class NNDynamics(nn.Module):
             Ws = self.Ws
             zs = self.zs
 
-        assert len(zs) == len(Ws)-1
-        grad = Ws[-1].repeat(n_batch,1,1)
-        for i in range(len(zs)-1, 0-1, -1):
+        assert len(zs) == len(Ws) - 1
+        grad = Ws[-1].repeat(n_batch, 1, 1)
+        for i in range(len(zs) - 1, 0 - 1, -1):
             n_out, n_in = Ws[i].size()
 
             if self.activation == 'relu':
-                I = util.get_data_maybe(zs[i] <= 0.).unsqueeze(2).repeat(1,1,n_in)
-                Wi_grad = Ws[i].repeat(n_batch,1,1)
+                I = util.get_data_maybe(zs[i] <= 0.).unsqueeze(2).repeat(1, 1, n_in)
+                Wi_grad = Ws[i].repeat(n_batch, 1, 1)
                 Wi_grad[I] = 0.
             elif self.activation == 'sigmoid':
-                d = zs[i]*(1.-zs[i])
+                d = zs[i] * (1. - zs[i])
                 d = d.unsqueeze(2).expand(n_batch, n_out, n_in)
-                Wi_grad = Ws[i].repeat(n_batch,1,1)*d
+                Wi_grad = Ws[i].repeat(n_batch, 1, 1) * d
             else:
                 assert False
 
             grad = grad.bmm(Wi_grad)
 
-        R = grad[:,:,:n_state]
-        S = grad[:,:,n_state:]
+        R = grad[:, :, :n_state]
+        S = grad[:, :, n_state:]
 
         if self.passthrough:
             I = torch.eye(n_state).type_as(util.get_data_maybe(R)) \
@@ -143,7 +138,7 @@ class CtrlPassthroughDynamics(nn.Module):
             u = u.unsqueeze(0)
 
         n_ctrl = u.size(1)
-        x = tilde_x[:,n_ctrl:]
+        x = tilde_x[:, n_ctrl:]
         xtp1 = self.dynamics(x, u)
         tilde_xtp1 = torch.cat((u, xtp1), dim=1)
 

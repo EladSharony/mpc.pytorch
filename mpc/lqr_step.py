@@ -233,7 +233,6 @@ def LQRStep(n_state,
                 if u_lower is not None:
                     lb = get_bound('lower', t)
                     ub = get_bound('upper', t)
-
                     if delta_u is not None:
                         lb_limit, ub_limit = lb, ub
                         lb = u[t] - delta_u
@@ -243,8 +242,8 @@ def LQRStep(n_state,
                         I = ub > ub_limit
                         ub[I] = ub_limit if isinstance(lb_limit, float) else ub_limit[I]
                     new_ut = torch.clamp(new_ut, lb, ub)
-                new_u.append(new_ut)
 
+                new_u.append(new_ut)
                 new_xut = torch.cat((new_xt, new_ut), dim=1)
                 # Dynamics update
                 if t < T - 1:
