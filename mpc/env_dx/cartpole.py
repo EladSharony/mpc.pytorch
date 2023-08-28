@@ -1,49 +1,33 @@
-#!/usr/bin/env python3
-
 import torch
-from torch.autograd import Function, Variable
-import torch.nn.functional as F
-from torch import nn
-from torch.nn.parameter import Parameter
-
 import numpy as np
 
 from mpc import util
 
 import os
-
 import shutil
 FFMPEG_BIN = shutil.which('ffmpeg')
 
 import matplotlib
-matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+matplotlib.use('Agg')
 plt.style.use('bmh')
 
-# import sys
-# from IPython.core import ultratb
-# sys.excepthook = ultratb.FormattedTB(mode='Verbose',
-#      color_scheme='Linux', call_pdb=1)
 
-class CartpoleDx(nn.Module):
-    def __init__(self, params=None):
+class CartpoleDx(torch.nn.Module):
+    def __init__(self, params=None, device="cuda:0" if torch.cuda.is_available() else "cpu"):
         super().__init__()
-
+        self.device = device
         self.n_state = 5
         self.n_ctrl = 1
 
         # model parameters
         if params is None:
             # gravity, masscart, masspole, length
-            self.params = Variable(torch.Tensor((9.8, 1.0, 0.1, 0.5)))
+            self.params = torch.tensor((9.8, 1.0, 0.1, 0.5), device=self.device)
         else:
             self.params = params
         assert len(self.params) == 4
         self.force_mag = 100.
-
-        self.theta_threshold_radians = np.pi#12 * 2 * np.pi / 360
-        self.x_threshold = 2.4
-        self.max_velocity = 10
 
         self.dt = 0.05
 
@@ -52,8 +36,8 @@ class CartpoleDx(nn.Module):
 
         # 0  1      2        3   4
         # x dx cos(th) sin(th) dth
-        self.goal_state = torch.Tensor(  [ 0.,  0.,  1., 0.,   0.])
-        self.goal_weights = torch.Tensor([0.1, 0.1,  1., 1., 0.1])
+        self.goal_state = torch.tensor(  [ 0.,  0.,  1., 0.,   0.], device=self.device)
+        self.goal_weights = torch.tensor([0.1, 0.1,  1., 1., 0.1], device=self.device)
         self.ctrl_penalty = 0.001
 
         self.mpc_eps = 1e-4
@@ -68,7 +52,8 @@ class CartpoleDx(nn.Module):
             u = u.unsqueeze(0)
 
         if state.is_cuda and not self.params.is_cuda:
-            self.params = self.params.cuda()
+            self.params = self.params.cuda() if self.device == "cuda:0" else self.params.cpu()
+            # self.params = self.params.cuda()
         gravity, masscart, masspole, length = torch.unbind(self.params)
         total_mass = masspole + masscart
         polemass_length = masspole * length
@@ -89,10 +74,7 @@ class CartpoleDx(nn.Module):
         th = th + self.dt * dth
         dth = dth + self.dt * th_acc
 
-        state = torch.stack((
-            x, dx, torch.cos(th), torch.sin(th), dth
-        ), 1)
-
+        state = torch.stack((x, dx, torch.cos(th), torch.sin(th), dth), 1)
         return state
 
     def get_frame(self, state, ax=None):
@@ -116,12 +98,12 @@ class CartpoleDx(nn.Module):
     def get_true_obj(self):
         q = torch.cat((
             self.goal_weights,
-            self.ctrl_penalty*torch.ones(self.n_ctrl)
+            self.ctrl_penalty*torch.ones(self.n_ctrl, device=self.device)
         ))
         assert not hasattr(self, 'mpc_lin')
         px = -torch.sqrt(self.goal_weights)*self.goal_state #+ self.mpc_lin
-        p = torch.cat((px, torch.zeros(self.n_ctrl)))
-        return Variable(q), Variable(p)
+        p = torch.cat((px, torch.zeros(self.n_ctrl, device=self.device)))
+        return q.clone(), p.clone()
 
 if __name__ == '__main__':
     dx = CartpoleDx()

@@ -185,7 +185,7 @@ def get_cost(T, u, cost, dynamics=None, x_init=None, x=None):
         obj = cost(xut)
         total_obj = obj
         for t in range(T-1):
-            xut = torch.cat((x[t+1], u[t+1]))
+            xut = torch.cat((x[t+1], u[t+1]), 1)
             obj = cost(xut)
             total_obj += obj
     return total_obj

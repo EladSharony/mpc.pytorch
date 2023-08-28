@@ -180,7 +180,7 @@ class MPC(Module):
 
         # Batch Size Inference
         n_batch = self.n_batch if self.n_batch \
-            else (cost.C.size(1) if isinstance(cost, QuadCost) and cost.C.ndimension() == 4 else None)
+            else (cost.C.size(1) if (isinstance(cost, QuadCost) and cost.C.ndimension() == 4) else cost.n_batch)
         if n_batch is None:
             raise ValueError('MPC Error: Could not infer batch size, pass in as n_batch.')
 
@@ -203,6 +203,10 @@ class MPC(Module):
                 raise ValueError('MPC Error: Unexpected QuadCost shape.')
 
             cost = QuadCost(C, c)
+        # if isinstance(cost, Module):
+        #     C, c = cost.Ct, cost.ct
+        #     C = C.unsqueeze(0).unsqueeze(1).expand(self.T, n_batch, self.n_state + self.n_ctrl, -1)
+        #     c = c.unsqueeze(0).unsqueeze(1).expand(self.T, n_batch, -1)
 
         assert x_init.ndimension() == 2 and x_init.size(0) == n_batch
 
@@ -239,8 +243,13 @@ class MPC(Module):
             # Linearize the dynamics around the current trajectory & approximate cost
             F, f = (dx.F, dx.f) if isinstance(dx, LinDx) \
                 else self.linearize_dynamics(x, util.detach_maybe(u), dx, diff=False)
-            C, c = (cost.C, cost.c) if isinstance(cost, QuadCost) \
-                else self.approximate_cost(x, util.detach_maybe(u), cost, diff=False)
+            if isinstance(cost, QuadCost):
+                C, c = cost.C, cost.c
+            elif isinstance(cost, Module):
+                C, c = cost.C, cost.c
+            else:
+                C, c, _ = self.approximate_cost(
+                    x, util.detach_maybe(u), cost, diff=False)
 
             # Solve LQR subproblem
             x, u, n_total_qp_iter, costs, full_du_norm, mean_alphas = \
@@ -291,7 +300,12 @@ class MPC(Module):
 
         # Post Optimization
         F, f = (dx.F, dx.f) if isinstance(dx, LinDx) else self.linearize_dynamics(x, u, dx, diff=True)
-        C, c = (cost.C, cost.c) if isinstance(cost, QuadCost) else self.approximate_cost(x, u, cost, diff=True)
+        if isinstance(cost, QuadCost):
+            C, c = cost.C, cost.c
+        elif isinstance(cost, Module):
+            C, c = cost.C, cost.c
+        else:
+            C, c, _ = self.approximate_cost(x, u, cost, diff=True)
         x, u = self.solve_lqr_subproblem(x_init, C, c, F, f, cost, dx, x, u, no_op_forward=True)
 
         is_converged = full_du_norm < self.eps
@@ -313,7 +327,8 @@ class MPC(Module):
             (x, u, costs, iter_num + 1, is_converged.detach(), iter_log)
 
     def solve_lqr_subproblem(self, x_init, C, c, F, f, cost, dynamics, x, u, no_op_forward=False):
-        if self.slew_rate_penalty is None or isinstance(cost, Module):
+        # TODO: i think "or isinstance(cost, Module)" should be removed
+        if self.slew_rate_penalty is None:  # or isinstance(cost, Module):
             _lqr = LQRStep(
                 n_state=self.n_state,
                 n_ctrl=self.n_ctrl,
@@ -371,8 +386,15 @@ class MPC(Module):
             _x_init = torch.cat((prev_u[0], x_init), 1)
 
             _dynamics = CtrlPassthroughDynamics(dynamics) if not isinstance(dynamics, LinDx) else None
-            _true_cost = SlewRateCost(cost, slew_C, self.n_state, self.n_ctrl) if not isinstance(cost, QuadCost) \
-                else QuadCost(_C, _c)
+
+            if isinstance(cost, QuadCost):
+                _true_cost = QuadCost(_C, _c)
+            elif isinstance(cost, Module):
+                cost.C = _C
+                cost.c = _c
+                _true_cost = cost
+            else:
+                _true_cost = SlewRateCost(cost, slew_C, self.n_state, self.n_ctrl)
 
             _lqr = LQRStep(
                 n_state=_n_state,
@@ -429,7 +451,7 @@ class MPC(Module):
             grads = torch.stack(grads, dim=0)
             hessians = torch.stack(hessians, dim=0)
 
-            return (hessians.data, grads.data, costs.data) if not diff else (hessians, grads, costs)
+            return (hessians.clone(), grads.clone(), costs.clone()) if not diff else (hessians, grads, costs)
 
     def linearize_dynamics(self, x, u, dynamics, diff):
 
