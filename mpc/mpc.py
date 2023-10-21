@@ -485,16 +485,22 @@ class MPC(Module):
             F, f = [], []
             for t in range(self.T):
                 if t < self.T - 1:
+                    new_x = dynamics(x[t], u[t])
                     xt = x[t].clone().requires_grad_()
                     ut = u[t].clone().requires_grad_()
-                    new_x = dynamics(xt, ut)
+
 
                     # Linear dynamics approximation.
                     if self.grad_method in [GradMethods.AUTO_DIFF, GradMethods.ANALYTIC_CHECK]:
                         # Linear dynamics approximation using autograd
-                        Rt, St = zip(*[torch.autograd.grad(new_x[:, j].sum(), [xt, ut], retain_graph=True)
-                                       for j in range(self.n_state)])
-                        Rt, St = torch.stack(Rt, dim=1), torch.stack(St, dim=1)
+
+                        # Rt, St = zip(*[torch.autograd.grad(new_x[:, j].squeeze(), [xt, ut], retain_graph=True)
+                        #                for j in range(self.n_state)])
+                        # Rt, St = torch.stack(Rt, dim=1), torch.stack(St, dim=1)
+                        # NOTE: I've replaced the latter with the following
+
+                        Rt, St = torch.autograd.functional.jacobian(dynamics, (xt, ut))
+                        Rt, St = Rt.squeeze(2), St.squeeze(2)
 
                     elif self.grad_method == GradMethods.FINITE_DIFF:
                         # Linear dynamics approximation using finite difference
@@ -510,6 +516,7 @@ class MPC(Module):
 
                     if not diff:
                         xt, ut, new_x = xt.detach(), ut.detach(), new_x.detach()
+
                     ft = new_x - util.bmv(Rt, xt) - util.bmv(St, ut)
                     f.append(ft)
 

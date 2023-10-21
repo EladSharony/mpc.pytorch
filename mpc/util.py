@@ -22,6 +22,7 @@ def jacobian(f, x, eps):
         perturbed_value = f(x_high_precision + eps * e[i])
         for j, f_val in enumerate(perturbed_value.unbind()):
             J_separate.append((f_val - f_original[j]) / eps)
+        # J_separate.append((perturbed_value - f_original) / eps)
     J_high_precision = torch.stack(J_separate).reshape(n, -1).T
     return J_high_precision.to(dtype=x.dtype)
 
