@@ -355,7 +355,7 @@ def LQRStep(n_state,
             ctx.save_for_backward(x_init, C, c, F, f, new_x, new_u)
 
             return new_x, new_u, torch.tensor(
-                [n_total_qp_iter]), for_out.costs, for_out.full_du_norm, for_out.mean_alphas
+                [n_total_qp_iter]), for_out.costs, for_out.full_du_norm, for_out.mean_alphas, for_out.alpha_du_norm
 
         @staticmethod
         def backward(ctx, dl_dx, dl_du):

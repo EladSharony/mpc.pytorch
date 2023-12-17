@@ -1,3 +1,4 @@
+import pandas as pd
 import torch
 from torch.autograd import Function, Variable
 from torch.nn import Module
@@ -252,7 +253,7 @@ class MPC(Module):
                     x, util.detach_maybe(u), cost, diff=False)
 
             # Solve LQR subproblem
-            x, u, n_total_qp_iter, costs, full_du_norm, mean_alphas = \
+            x, u, n_total_qp_iter, costs, full_du_norm, mean_alphas, alpha_du_norm = \
                 (self.solve_lqr_subproblem(x_init, C, c, F, f, cost, dx, x, u))
             n_not_improved += 1
 
@@ -276,15 +277,35 @@ class MPC(Module):
                         best['full_du_norm'][j] = full_du_norm[j]
 
             if self.verbose > 0:
-                util.table_log('lqr', (
-                    ('iter', iter_num),
-                    ('mean(cost)', torch.mean(best['costs']).item(), '{:.4e}'),
-                    ('||full_du||_max', max(full_du_norm).item(), '{:.2e}'),
-                    # ('||alpha_du||_max', max(alpha_du_norm), '{:.2e}'),
-                    # TODO: alphas, total_qp_iters here is for the current iterate, not the best
-                    ('mean(alphas)', mean_alphas.item(), '{:.2e}'),
-                    ('total_qp_iters', n_total_qp_iter),
-                ))
+                df = pd.DataFrame(
+                    columns = ['iter', 'mean_cost', 'full_du_max', 'alpha_du_max', 'mean_alphas', 'total_qp_iters'],
+                    data = {
+                        'iter': iter_num,
+                        'mean_cost': torch.mean(best['costs']).item(),
+                        'full_du_max': max(best['full_du_norm']).item(),
+                        'alpha_du_max': max(alpha_du_norm).item(),
+                        'mean_alphas': mean_alphas.item(),
+                        'total_qp_iters': n_total_qp_iter.item(),
+                    },
+                    index = [iter_num],
+                )
+                # save df to file
+                # df.to_csv(f'linesearch_decay_{self.linesearch_decay:.2f}.csv', mode='a', header=True, index=False)
+
+                # print(f'iter {iter_num}: mean(cost): {torch.mean(best["costs"]).item():.2e}'
+                #         f' ||full_du||_max: {max(best["full_du_norm"]).item():.2e}'
+                #         f' ||alpha_du||_max: {max(alpha_du_norm):.2e}'
+                #         f' mean(alphas): {mean_alphas:.2e}'
+                #         f' total_qp_iters: {n_total_qp_iter}')
+                # util.table_log('lqr', (
+                #     ('iter', iter_num),
+                #     ('mean(cost)', torch.mean(best['costs']).item(), '{:.4e}'),
+                #     ('||full_du||_max', max(full_du_norm).item(), '{:.2e}'),
+                #     ('||alpha_du||_max', max(alpha_du_norm), '{:.2e}'),
+                #     # TODO: alphas, total_qp_iters here is for the current iterate, not the best
+                #     ('mean(alphas)', mean_alphas.item(), '{:.2e}'),
+                #     ('total_qp_iters', n_total_qp_iter),
+                # ))
 
             if log_iterations:
                 iter_log[x].append(x.detach())
@@ -323,6 +344,7 @@ class MPC(Module):
             u = u * Iu + u.clone().detach() * (1. - Iu)
 
         costs = best['costs']
+
         return (x, u, costs, iter_num + 1, is_converged.detach()) if not log_iterations else \
             (x, u, costs, iter_num + 1, is_converged.detach(), iter_log)
 
